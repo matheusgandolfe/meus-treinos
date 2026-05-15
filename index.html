@@ -350,6 +350,20 @@ select option{background:#1a1a1a}
   <button class="btn-primary" style="margin-top:0" onclick="salvarTreinoCustom()">Salvar treino</button>
 </div>
 
+<!-- Modal link de vídeo -->
+<div class="modal-backdrop" id="bd-videolink" onclick="fecharModalLink()"></div>
+<div class="modal-sheet" id="ms-videolink">
+  <div class="modal-title">Link do vídeo <button class="modal-close" onclick="fecharModalLink()">✕</button></div>
+  <div class="form-group">
+    <label class="form-label">Cole o link do vídeo (Hotmart, YouTube…)</label>
+    <input class="form-input" id="videolink-input" placeholder="https://…" type="url">
+  </div>
+  <div style="display:flex;gap:8px">
+    <button class="btn-primary" style="margin-top:0" onclick="salvarLinkVideo()">Salvar link</button>
+    <button class="btn-danger" style="margin-top:8px;padding:14px" onclick="removerLinkVideo()">Remover</button>
+  </div>
+</div>
+
 <!-- Modal academias -->
 <div class="modal-backdrop" id="bd-academias" onclick="fecharModalAcademias()"></div>
 <div class="modal-sheet" id="ms-academias">
@@ -462,8 +476,8 @@ let STATE = {
   registros: [],
   treinosCustom: [],
   academias: [],
-  exCustom: {},      // {grupo: [nomes]}
-  planoAbcd: null,   // override dos treinos ABCD do usuário (salvo em treinos_custom com id A/B/C/D)
+  exCustom: {},
+  videoLinks: {},  // {treino_exercicio: url}
 };
 
 function getPlano(id){
@@ -585,15 +599,17 @@ document.getElementById('login-senha').addEventListener('keydown',e=>{if(e.key==
 // CARREGAR DADOS DO SUPABASE
 // ══════════════════════════════════════
 async function carregarDados(){
-  const [registros, treinosCustom, academias] = await Promise.all([
+  const [registros, treinosCustom, academias, videoLinks] = await Promise.all([
     sbFetch('/rest/v1/treinos?select=*&order=id.desc').catch(()=>[]),
     sbFetch('/rest/v1/treinos_custom?select=*').catch(()=>[]),
     sbFetch('/rest/v1/academias?select=*&order=id.asc').catch(()=>[]),
+    sbFetch('/rest/v1/video_links?select=*').catch(()=>[]),
   ]);
   STATE.registros=(registros||[]).map(r=>({id:r.id,data:r.data,exercicio:r.exercicio,academia:r.academia||'',grupo:r.grupo||'',series:r.series||[],obs:r.obs||''}));
   STATE.treinosCustom=(treinosCustom||[]).map(t=>({id:t.id,nome:t.nome,grupos:t.grupos||[],exercicios:t.exercicios||[]}));
   STATE.academias=(academias||[]).map(a=>a.nome);
-  // Exercícios custom: extraídos dos registros (grupos não base)
+  STATE.videoLinks={};
+  (videoLinks||[]).forEach(v=>{ STATE.videoLinks[v.chave]=v.url; });
   STATE.exCustom={};
 }
 
@@ -916,6 +932,43 @@ function renderHoje(){
 function mudarDia(t){setDiaHoje(t);renderHoje();const todos=getTodosTreinos();showToast(t?`${todos[t]?.nome||t} selecionado`:'Descanso marcado 😴');}
 
 // ══════════════════════════════════════
+// LINKS DE VÍDEO
+// ══════════════════════════════════════
+let editandoLinkKey=null;
+function editarLinkVideo(chave){
+  editandoLinkKey=chave;
+  document.getElementById('videolink-input').value=STATE.videoLinks[chave]||'';
+  document.getElementById('bd-videolink').classList.add('open');
+  document.getElementById('ms-videolink').classList.add('open');
+  setTimeout(()=>document.getElementById('videolink-input').focus(),100);
+}
+function fecharModalLink(){
+  document.getElementById('bd-videolink').classList.remove('open');
+  document.getElementById('ms-videolink').classList.remove('open');
+  editandoLinkKey=null;
+}
+async function salvarLinkVideo(){
+  const url=document.getElementById('videolink-input').value.trim();
+  if(!url){showToast('Cole um link válido',true);return;}
+  STATE.videoLinks[editandoLinkKey]=url;
+  fecharModalLink();renderTreino();
+  try{
+    await sbFetch('/rest/v1/video_links',{
+      method:'POST',
+      headers:{'Prefer':'resolution=merge-duplicates'},
+      body:JSON.stringify({chave:editandoLinkKey,url,user_id:CURRENT_USER.id})
+    });
+    showToast('✓ Link salvo!');
+  }catch{showToast('Link salvo localmente',true);}
+}
+async function removerLinkVideo(){
+  delete STATE.videoLinks[editandoLinkKey];
+  fecharModalLink();renderTreino();
+  try{await sbFetch(`/rest/v1/video_links?chave=eq.${encodeURIComponent(editandoLinkKey)}`,{method:'DELETE'});}catch{}
+  showToast('Link removido');
+}
+
+// ══════════════════════════════════════
 // RENDER TREINO
 // ══════════════════════════════════════
 let treinoAtivo=getDiaHoje()||'A';
@@ -951,6 +1004,7 @@ function renderTreino(){
 
   plano.exercicios.forEach((ex,i)=>{
     const chKey=`${todayKey}_${treinoAtivo}_${i}`,done=!!checks[chKey];
+    const linkKey=`${treinoAtivo}_${ex.nome}`;
     html+=`<div class="ex-card${done?' done-card':''}">
       <div class="ex-header">
         <div class="ex-name">${ex.nome}</div>
@@ -960,7 +1014,11 @@ function renderTreino(){
       ${ex.series.filter(s=>s.obs).map(s=>`<span class="note-badge">💡 ${s.obs}</span>`).join('')}
       <div class="ex-actions">
         <button class="btn-ghost" style="font-size:12px;padding:6px 12px" onclick="prefillLog('${ex.nome.replace(/'/g,"\\'")}','${ex.grupo||''}',${i})">+ Registrar carga</button>
-        ${ex.video?`<a class="btn-video" href="${ex.video}" target="_blank" rel="noopener">${playIcon} Ver vídeo</a>`:''}
+        ${STATE.videoLinks[linkKey]
+          ? `<a class="btn-video" href="${STATE.videoLinks[linkKey]}" target="_blank" rel="noopener">${playIcon} Ver vídeo</a>
+             <button class="btn-video" style="cursor:pointer;border:none" onclick="editarLinkVideo('${linkKey.replace(/'/g,"\\'")}')">✏️</button>`
+          : `<button class="btn-video" style="cursor:pointer;border-style:dashed;opacity:.6" onclick="editarLinkVideo('${linkKey.replace(/'/g,"\\'")}')">🔗 Adicionar link</button>`
+        }
       </div>
     </div>`;
   });
