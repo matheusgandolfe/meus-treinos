@@ -3,7 +3,12 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>Meus Treinos</title>
+<title>Meu Treino</title>
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Meu Treino">
+<link rel="apple-touch-icon" href="https://matheusgandolfe.github.io/meus-treinos/icon.png">
+<link rel="icon" href="https://matheusgandolfe.github.io/meus-treinos/icon.png">
 <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=DM+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
 <style>
 :root{
@@ -204,6 +209,7 @@ select option{background:#1a1a1a}
     <input class="form-input" id="login-senha" type="password" placeholder="••••••••" autocomplete="current-password">
   </div>
   <button class="btn-primary" id="btn-login" onclick="fazerLogin()" style="margin-top:4px">Entrar</button>
+  <button onclick="esqueceuSenha()" style="background:none;border:none;color:var(--text3);font-size:13px;cursor:pointer;margin-top:14px;width:100%;font-family:'DM Sans',sans-serif">Esqueci minha senha</button>
 </div>
 
 <!-- App -->
@@ -408,8 +414,30 @@ async function signIn(email,senha){
   if(!r.ok) throw new Error(d.error_description||d.msg||'Email ou senha incorretos');
   return d;
 }
+async function refreshSession(refreshToken){
+  const r=await fetch(SB_URL+'/auth/v1/token?grant_type=refresh_token',{method:'POST',headers:{'Content-Type':'application/json','apikey':SB_KEY},body:JSON.stringify({refresh_token:refreshToken})});
+  const d=await r.json();
+  if(!r.ok) throw new Error('Sessão expirada');
+  return d;
+}
 async function signOut(){
   await fetch(SB_URL+'/auth/v1/logout',{method:'POST',headers:{'Content-Type':'application/json','apikey':SB_KEY,'Authorization':'Bearer '+SB_TOKEN}});
+}
+async function esqueceuSenha(){
+  const email=document.getElementById('login-email').value.trim();
+  if(!email){showToast('Digite seu email primeiro',true);return;}
+  try{
+    await fetch(SB_URL+'/auth/v1/recover',{method:'POST',headers:{'Content-Type':'application/json','apikey':SB_KEY},body:JSON.stringify({email})});
+    showToast('✓ Email de recuperação enviado!');
+  }catch{showToast('Erro ao enviar email',true);}
+}
+function salvarSessao(session){
+  localStorage.setItem(KEY_SESSION,JSON.stringify({
+    token:session.access_token,
+    refresh:session.refresh_token,
+    user:session.user,
+    expires:Date.now()+(session.expires_in||3600)*1000
+  }));
 }
 
 // ══════════════════════════════════════
@@ -575,7 +603,7 @@ async function fazerLogin(){
     }
     SB_TOKEN=session.access_token;
     CURRENT_USER=session.user;
-    localStorage.setItem(KEY_SESSION,JSON.stringify({token:session.access_token,user:session.user,expires:Date.now()+3600000}));
+    salvarSessao(session);
     await iniciarApp();
   }catch(e){
     errEl.textContent=e.message;errEl.style.display='block';
@@ -1140,9 +1168,21 @@ function render(){
 (async()=>{
   try{
     const saved=JSON.parse(localStorage.getItem(KEY_SESSION));
-    if(saved&&saved.token&&saved.expires>Date.now()){
-      SB_TOKEN=saved.token;CURRENT_USER=saved.user;
-      await iniciarApp();return;
+    if(saved&&saved.token){
+      // Se token ainda válido (com 5min de margem)
+      if(saved.expires>Date.now()+300000){
+        SB_TOKEN=saved.token;CURRENT_USER=saved.user;
+        await iniciarApp();return;
+      }
+      // Token expirado — tenta renovar com refresh token
+      if(saved.refresh){
+        try{
+          const novo=await refreshSession(saved.refresh);
+          SB_TOKEN=novo.access_token;CURRENT_USER=novo.user;
+          salvarSessao(novo);
+          await iniciarApp();return;
+        }catch{}
+      }
     }
   }catch{}
   document.getElementById('loading-screen').style.display='none';
