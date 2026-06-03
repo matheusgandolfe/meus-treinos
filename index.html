@@ -541,8 +541,7 @@ function setDiaHoje(t){localStorage.setItem(KEY_DIA,JSON.stringify({date:today()
 function loadChecks(){try{return JSON.parse(localStorage.getItem(KEY_CHECK))||{};}catch{return{};}}
 function saveChecks(d){localStorage.setItem(KEY_CHECK,JSON.stringify(d));}
 
-function today(){return new Date().toISOString().slice(0,10);}
-function formatDate(d){const[y,m,dia]=d.split('-');return `${dia} ${'jan fev mar abr mai jun jul ago set out nov dez'.split(' ')[+m-1]} ${y}`;}
+function today(){const d=new Date();return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');}function formatDate(d){const[y,m,dia]=d.split('-');return `${dia} ${'jan fev mar abr mai jun jul ago set out nov dez'.split(' ')[+m-1]} ${y}`;}
 function diaSem(d){return 'Dom Seg Ter Qua Qui Sex Sáb'.split(' ')[new Date(d+'T12:00:00').getDay()];}
 
 // ══════════════════════════════════════
@@ -627,18 +626,24 @@ document.getElementById('login-senha').addEventListener('keydown',e=>{if(e.key==
 // CARREGAR DADOS DO SUPABASE
 // ══════════════════════════════════════
 async function carregarDados(){
-  const [registros, treinosCustom, academias, videoLinks] = await Promise.all([
+  const [registros, treinosCustom, academias, videoLinks, exCustomDB] = await Promise.all([
     sbFetch('/rest/v1/treinos?select=*&order=id.desc').catch(()=>[]),
     sbFetch('/rest/v1/treinos_custom?select=*').catch(()=>[]),
     sbFetch('/rest/v1/academias?select=*&order=id.asc').catch(()=>[]),
     sbFetch('/rest/v1/video_links?select=*').catch(()=>[]),
+    sbFetch('/rest/v1/exercicios_custom?select=*&order=id.asc').catch(()=>[]),
   ]);
   STATE.registros=(registros||[]).map(r=>({id:r.id,data:r.data,exercicio:r.exercicio,academia:r.academia||'',grupo:r.grupo||'',series:r.series||[],obs:r.obs||''}));
   STATE.treinosCustom=(treinosCustom||[]).map(t=>({id:t.id,nome:t.nome,grupos:t.grupos||[],exercicios:t.exercicios||[]}));
   STATE.academias=(academias||[]).map(a=>a.nome);
   STATE.videoLinks={};
   (videoLinks||[]).forEach(v=>{ STATE.videoLinks[v.chave]=v.url; });
+  // Exercícios customizados agrupados por grupo muscular
   STATE.exCustom={};
+  (exCustomDB||[]).forEach(e=>{
+    if(!STATE.exCustom[e.grupo]) STATE.exCustom[e.grupo]=[];
+    STATE.exCustom[e.grupo].push(e.nome);
+  });
 }
 
 async function iniciarApp(){
@@ -688,7 +693,11 @@ function salvarNovoEx(){
   const grupoAtual=document.getElementById('r-grupo').value;
   if(grupoAtual===grupo) onGrupoChange();
   setTimeout(()=>{const sel=document.getElementById('r-exercicio');for(let o of sel.options){if(o.value===nome){o.selected=true;break;}}},50);
-  showToast(`✓ "${nome}" adicionado`);
+  // Salva no Supabase
+  sbFetch('/rest/v1/exercicios_custom',{
+    method:'POST',
+    body:JSON.stringify({grupo,nome,user_id:CURRENT_USER.id})
+  }).then(()=>showToast(`✓ "${nome}" adicionado`)).catch(()=>showToast(`"${nome}" salvo localmente`,true));
 }
 document.getElementById('novoex-nome').addEventListener('keydown',e=>{if(e.key==='Enter')salvarNovoEx();});
 
